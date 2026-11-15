@@ -7,7 +7,8 @@ Run:  streamlit run app.py
 import streamlit as st
 from dotenv import load_dotenv
 from audio_recorder_streamlit import audio_recorder
-import base64
+from gtts import gTTS
+import io
 
 from config.persona import PERSONA
 from services.groq_service import transcribe_audio, get_llm_response
@@ -76,20 +77,17 @@ p { color: #cbd5e1; }
 if "messages" not in st.session_state:
     st.session_state.messages = []   # list of {"role": "user"|"bot", "text": str}
 
-# ── helper: browser TTS ───────────────────────────────────────────────────────
-def speak_in_browser(text: str):
-    """Inject JS to speak text using the browser's built-in TTS."""
-    safe = text.replace("`", "'").replace("\n", " ")
-    st.components.v1.html(f"""
-    <script>
-        const utter = new SpeechSynthesisUtterance(`{safe}`);
-        utter.lang = 'en-US';
-        utter.rate = 0.95;
-        utter.pitch = 1.0;
-        window.speechSynthesis.cancel();
-        window.speechSynthesis.speak(utter);
-    </script>
-    """, height=0)
+# ── helper: gTTS voice output ─────────────────────────────────────────────────
+def speak_response(text: str):
+    """Convert text to speech using gTTS and autoplay via st.audio."""
+    try:
+        tts = gTTS(text=text, lang="en", slow=False)
+        audio_buffer = io.BytesIO()
+        tts.write_to_fp(audio_buffer)
+        audio_buffer.seek(0)
+        st.audio(audio_buffer, format="audio/mp3", autoplay=True)
+    except Exception:
+        pass  # TTS failure is non-critical — text is still shown
 
 # ── helper: process a question (text or transcribed) ─────────────────────────
 def process_question(question: str):
@@ -99,7 +97,7 @@ def process_question(question: str):
     with st.spinner("🤔 Thinking..."):
         reply = get_llm_response(question, PERSONA["system_prompt"])
     st.session_state.messages.append({"role": "bot", "text": reply})
-    speak_in_browser(reply)
+    speak_response(reply)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # UI
