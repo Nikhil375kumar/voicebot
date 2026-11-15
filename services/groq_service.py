@@ -17,6 +17,7 @@ def get_client() -> Groq:
 def transcribe_audio(audio_bytes: bytes, filename: str = "audio.wav") -> str:
     """
     Convert speech audio bytes → text using Groq Whisper.
+    Forces English to avoid mis-detection of accent as another language.
     Returns the transcribed string.
     """
     client = get_client()
@@ -24,6 +25,8 @@ def transcribe_audio(audio_bytes: bytes, filename: str = "audio.wav") -> str:
         model="whisper-large-v3-turbo",
         file=(filename, audio_bytes),
         response_format="text",
+        language="en",
+        prompt="Interview questions about life story, superpower, growth areas, failure, boundaries, limits, motivation, misconceptions, coworkers.",
     )
     return transcription.strip()
 

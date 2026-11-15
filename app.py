@@ -9,6 +9,8 @@ from dotenv import load_dotenv
 from audio_recorder_streamlit import audio_recorder
 from gtts import gTTS
 import io
+import base64
+import time
 
 from config.persona import PERSONA
 from services.groq_service import transcribe_audio, get_llm_response
@@ -76,18 +78,34 @@ p { color: #cbd5e1; }
 # ── session state ─────────────────────────────────────────────────────────────
 if "messages" not in st.session_state:
     st.session_state.messages = []   # list of {"role": "user"|"bot", "text": str}
+if "pending_audio" not in st.session_state:
+    st.session_state.pending_audio = None  # base64 audio to play after rerun
 
-# ── helper: gTTS voice output ─────────────────────────────────────────────────
-def speak_response(text: str):
-    """Convert text to speech using gTTS and autoplay via st.audio."""
+# ── helper: generate audio base64 (does NOT play — just returns bytes) ────────
+def generate_audio_b64(text: str):
+    """Generate gTTS audio and return as base64 string. Returns None on failure."""
     try:
         tts = gTTS(text=text, lang="en", slow=False)
-        audio_buffer = io.BytesIO()
-        tts.write_to_fp(audio_buffer)
-        audio_buffer.seek(0)
-        st.audio(audio_buffer, format="audio/mp3", autoplay=True)
+        buf = io.BytesIO()
+        tts.write_to_fp(buf)
+        buf.seek(0)
+        return base64.b64encode(buf.read()).decode()
     except Exception:
-        pass  # TTS failure is non-critical — text is still shown
+        return None
+
+# ── helper: render audio player (call DURING render, never before st.rerun) ──
+def render_audio(audio_b64: str):
+    """Inject autoplay audio HTML. Must be called during the render phase."""
+    uid = int(time.time() * 1000)
+    st.components.v1.html(f"""
+        <audio id="tts_{uid}" autoplay style="display:none">
+            <source src="data:audio/mp3;base64,{audio_b64}" type="audio/mp3">
+        </audio>
+        <script>
+            var a = document.getElementById('tts_{uid}');
+            if (a) a.play().catch(function(){{}});
+        </script>
+    """, height=0)
 
 # ── helper: process a question (text or transcribed) ─────────────────────────
 def process_question(question: str):
@@ -97,7 +115,8 @@ def process_question(question: str):
     with st.spinner("🤔 Thinking..."):
         reply = get_llm_response(question, PERSONA["system_prompt"])
     st.session_state.messages.append({"role": "bot", "text": reply})
-    speak_response(reply)
+    # ✅ Store audio in session_state — will be played AFTER st.rerun() during render
+    st.session_state.pending_audio = generate_audio_b64(reply)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # UI
@@ -115,8 +134,15 @@ if st.session_state.messages:
             st.markdown(f"<div class='user-bubble'>🧑 {msg['text']}</div>", unsafe_allow_html=True)
         else:
             st.markdown(f"<div class='bot-bubble'>🤖 {msg['text']}</div>", unsafe_allow_html=True)
+
+    # ✅ Play pending audio DURING render (after rerun) so st.rerun() doesn't cut it off
+    if st.session_state.pending_audio:
+        render_audio(st.session_state.pending_audio)
+        st.session_state.pending_audio = None  # clear after playing
+
     if st.button("🗑️ Clear conversation", use_container_width=False):
         st.session_state.messages = []
+        st.session_state.pending_audio = None
         st.rerun()
 else:
     st.markdown("<p style='text-align:center;color:#475569;padding:40px 0'>Start by clicking the mic or choosing a question below 👇</p>", unsafe_allow_html=True)
@@ -152,11 +178,16 @@ if audio_bytes and len(audio_bytes) > 1000:
                 st.error(f"❌ Transcription error: {e}")
         # Step 2: Send transcript to LLM (only if STT succeeded)
         if transcript and transcript.strip():
-            try:
-                process_question(transcript)
-                st.rerun()
-            except Exception as e:
-                st.error(f"❌ LLM error: {e}")
+            # Reject transcripts that are too short or look like noise
+            clean = transcript.strip()
+            if len(clean) < 4:
+                st.warning(f"⚠️ Couldn't understand: \"{clean}\" — please speak more clearly.")
+            else:
+                try:
+                    process_question(clean)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ LLM error: {e}")
 
 # ── sample questions ──────────────────────────────────────────────────────────
 st.markdown("<div class='section-title' style='margin-top:16px'>💡 Or click a question</div>", unsafe_allow_html=True)
